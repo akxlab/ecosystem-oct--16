@@ -30,7 +30,7 @@ const func0: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
 
    
 
-    const oracle =  await deploy("PriceOracle", {
+    /*const oracle =  await deploy("PriceOracle", {
         from: deployer,
         args: [],
         log: true,
@@ -44,7 +44,7 @@ const func0: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
     const tx = await iOracle['addNewTicker(address)'](token.address);
     await tx.wait();
     const tx2 = await iOracle.setPrice(symbol, basePrice);
-    await tx2.wait();
+    await tx2.wait();*/
 
 
     /*

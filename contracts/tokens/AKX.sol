@@ -1,25 +1,29 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.17;
-import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import "@openzeppelin/contracts/token/ERC20/extensions/draft-ERC20Permit.sol";
-import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
+pragma solidity 0.8.17;
+import "./Base/ERC20.sol";
+
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 
 
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "../Roles.sol";
 
-error ZeroValueSent();
 
-contract AKX3 is ERC20, ERC20Burnable, ERC20Permit, ReentrancyGuard, AKXRoles {
 
-    using SafeERC20 for IERC20;
+
+contract AKX3 is ERC20("AKX ECOSYSTEM", "AKX"), ReentrancyGuard, AKXRoles {
+
+    using SafeERC20 for ERC20;
     event Deposit(address indexed from, uint256 _value);
-    address public treasury = 0x39b9fdA7d6cfE6987126c9010aaA56635E224bdB;
+    uint256 public maxSupply = 300000000000 ether;
+    string public name = "AKX ECOSYSTEM";
+    string public constant  symbol = "AKX";
+    uint8 public constant decimals = 18;
+    error ZeroValueSent();
 
-bool canTransfer;
-    constructor() ERC20("AKX3 ECOSYSTEM", "AKX") ERC20Permit("AKX3 ECOSYSTEM") {
-        canTransfer = false;
+    bool canTransfer = false;
+
+    constructor()  {
         initRoles();
         _setupRole(DEFAULT_ADMIN_ROLE, _msgSender());
         _grantRole(AKX_OPERATOR_ROLE, _msgSender());
@@ -30,20 +34,7 @@ bool canTransfer;
     super._mint(_sender, amount);
     }
 
-    
- function _afterTokenTransfer(address from, address to, uint256 amount)
-        internal override
-        
-    {
-        super._afterTokenTransfer(from, to, amount);
-    }
 
-     function _beforeTokenTransfer(address from, address to, uint256 amount)
-        internal override
-      
-    {
-        super._afterTokenTransfer(from, to, amount);
-    }
 
  function enableTransfer() public onlyRole(AKX_OPERATOR_ROLE) {
         canTransfer = true;
@@ -54,9 +45,9 @@ bool canTransfer;
         _;
     }
 
-    function transfer(address _to, uint _value) public isTransferable virtual override returns (bool success) {
-        if (_value > 0 && _value <= balanceOf(msg.sender)) {
-            IERC20(this).safeTransfer( _to, _value);
+    function transfer(address _to, uint256 _value) public isTransferable virtual override returns (bool success) {
+        if (_value > 0 && _value <= balanceOf[msg.sender]) {
+           super.transfer(_to, _value);
             success = true;
         }
        revert("cannot transfer");
@@ -65,8 +56,8 @@ bool canTransfer;
     
 
     // withdraw function in case of emergency only executable by the operator and only transferable to the gnosis multisignature treasury wallet
-    function withdraw() external onlyRole(AKX_OPERATOR_ROLE) {
-        payable(treasury).transfer(address(this).balance);
+    function withdraw(address to) external onlyRole(AKX_OPERATOR_ROLE) {
+        payable(to).transfer(address(this).balance);
     }
 
     receive() external payable {

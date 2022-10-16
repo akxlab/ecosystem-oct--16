@@ -16,11 +16,13 @@ import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 import {AKX3, AKXRoles, ERC20} from "../tokens/AKX.sol";
 
 
-
 import {AKXMath} from "./AKXMath.sol";
 
-
-
+error NoZeroAddress();
+error  EmptyOrZeroEthSend();
+error ContractCannotBuy();
+error ContractCannotDeposit();
+error  NotEnoughtSupply();
 
 contract AKXTokenLogicEth is
     AKXRoles,
@@ -30,25 +32,31 @@ contract AKXTokenLogicEth is
 
     using SafeERC20 for ERC20;
     using Address for address;
-error NoZeroAddress();
-error  EmptyOrZeroEthSend();
-error ContractCannotBuy();
-error ContractCannotDeposit();
-error  NotEnoughtSupply();
+
 
     /// @notice maximum supply allowed to be minted or token supply available for presale (65 Million AKX)
-    uint256 public immutable presaleSupply = 650000000 ether;
+    /// @dev this is setup in the initializer to avoid upgradability issues
+    uint256 public presaleSupply;
     /// @notice maximum duration of presale is 180 days or until all available presale supply is sold
-    uint256 public immutable presaleMaxDuration = 180 days;
+    /// @dev this is setup in the initializer to avoid upgradability issues
+    uint256 public presaleMaxDuration;
 
     /// @notice when the presale did end if its expired
     /// @dev this is setup in the initializer to avoid upgradability issues
     uint256 public presaleEndedOn;
 
-    
+    /// @notice AKX founders addresses
+    /// @dev this is setup during deployment calling the addFounder function
+    address[] public founders;
+    /// @notice AKX founders allocations in AKX tokens
+    /// @dev this should never be preminted it is only allocated when tokens are sold and a maximum of 4% of available supply is allowed per founder
+    mapping(address => uint256) public founderAllocation;
+    /// @notice To check if an address is a founder
+    mapping(address => bool) public isFounder;
+
 
     /// @notice true if transfer is allowed, false if it is not
-    bool public canTransfer = false;
+    bool public canTransfer;
 
     /// @notice current AKX price in Ether (1 AKX = Price in ether)
     /// @dev price will be calculated externally to reduce gas fees and internal calculations
@@ -64,9 +72,7 @@ error  NotEnoughtSupply();
 
     event FeeWalletSet(address indexed fwAddress);
     event TreasurySet(address indexed twAddress);
-
     event Deposit(address indexed _sender, uint256 amount);
-    
     event FeeCollected(
         address indexed from,
         address indexed feeVault,
@@ -75,10 +81,10 @@ error  NotEnoughtSupply();
     event Buy(
         address indexed buyer,
         uint256 ethAmount,
-        uint256 akxAmount
+        uint256 akxAmount,
+        bool isPresale
     );
-   
-
+    event Sell(address indexed seller, uint256 amountAkx, uint256 amountEth);
     event Lock(address indexed wallet, uint256 akxAmount, uint256 unlockTime);
     event PriceUpdated(address indexed from, uint256 oldPrice, uint256 price);
 
@@ -92,22 +98,44 @@ error  NotEnoughtSupply();
     );
 
     /// @notice Ether is not transfered automatically to the treasury. It is sitting in this variable until a pull withdrawal request is made using the withdrawtoTreasury function from the Treasury wallet only.
-    uint256 public pendingTransferToTreasury = 0;
+    uint256 public pendingTransferToTreasury;
 
-    constructor(address  w1, address  w2,uint256 _bp)  {
-        price = _bp;
-        treasury = w1;
-        feeWallet = w2;
-
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor()  {
+        _disableInitializers();
       }
 
-    function setUnderlyingToken(address _ticker) public onlyRole("AKX_OPERATOR_ROLE") {
-        _underlyingToken = AKX3(payable(_ticker));
+    function initialize(
+        address _ticker,
+        uint256 _basePrice,
+        address _fw,
+        address _tw
+    ) public initializer {
+        __AKXTokenLogic_init(_ticker, _basePrice, _fw, _tw);
+        initRoles();
+        _setupRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _grantRole(AKX_OPERATOR_ROLE, msg.sender);
     }
 
+    function __AKXTokenLogic_init(
+        address _ticker,
+        uint256 _basePrice,
+        address _fw,
+        address _tw
+    ) public onlyInitializing {
+        _underlyingToken = AKX3(payable(_ticker));
 
-
+        presaleSupply = 650000000 ether; ///  65M AKX for presale: presale ends when all presale supply is sold
   
+        canTransfer = false;
+        price = _basePrice;
+
+        init();
+        feeWallet = _fw;
+        treasury = _tw;
+
+    }
+
     /// @notice updates AKX price in ether
     /// @dev only the operator can update the price which needs to be calculated externally emits PriceUpdated event
     /// @param newPrice the new price to set
@@ -159,7 +187,6 @@ error  NotEnoughtSupply();
     function enableTransfer() public onlyRole(AKX_OPERATOR_ROLE) {
         canTransfer = true;
         _underlyingToken.enableTransfer();
-
     }
 
     function disableTransfer() public onlyRole(AKX_OPERATOR_ROLE) {
@@ -185,10 +212,9 @@ error  NotEnoughtSupply();
 
         if (mintOverflowCheck(akxToMint + fee, ts)) {
             pendingTransferToTreasury += msg.value;
-            mintFees(_msgSender(), fee);
-            safeMint(_msgSender(), akxToMint - fee);
+            safeMint(_msgSender(), akxToMint);
         }
-        emit Buy(msg.sender, msg.value, akxToMint - fee);
+        emit Buy(msg.sender, msg.value, akxToMint - fee,true);
     }
 
     function mintOverflowCheck(uint256 amount, uint64 ts)
@@ -201,7 +227,7 @@ error  NotEnoughtSupply();
                 revert NotEnoughtSupply();
             }
         } else {
-            if (amount > _underlyingToken.maxSupply()) {
+            if (amount > 300000000000 * 1e18) {
                 revert NotEnoughtSupply();
             }
         }
@@ -223,6 +249,38 @@ error  NotEnoughtSupply();
     }
 
 
+
+    function addFounder(address founder)
+        public
+        onlyRole(AKX_OPERATOR_ROLE)
+    {
+        isFounder[founder] = true;
+        founders.push(founder);
+    }
+
+
+    function allocateToFounder(address founder, uint256 amount)
+        public
+        onlyRole(AKX_OPERATOR_ROLE)
+    {
+        founderAllocation[founder] = amount;
+    }
+
+
+    function executeAllocations(uint256 amt) internal {
+        uint j = 0;
+        for (j == 0; j < founders.length; j++) {
+            unchecked {
+                address f = founders[j];
+                if (isFounder[f]) {
+                    uint256 amount = getPercentForFounder(amt);
+                    allocateToFounder(f, amount);
+                    _underlyingToken.mint(f, amount);
+                }
+            }
+        }
+    }
+
      /// see pendingtotreasury public state for description
     function withdrawToTreasury()
         public
@@ -230,7 +288,6 @@ error  NotEnoughtSupply();
         onlyRole(AKX_OPERATOR_ROLE)
     {
         payable(treasury).transfer(address(this).balance);
-        emit WithdrawToTreasury(block.timestamp, pendingTransferToTreasury, treasury);
         pendingTransferToTreasury = 0;
     }
 

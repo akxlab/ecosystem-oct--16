@@ -49,7 +49,7 @@ abstract contract AKXMath  {
     }
 
     function getTxFee(uint256 amount) public view returns(uint256) {
-        return amount * txFee / 1e5;
+        return amount * txFee / mantissa;
     }
 
     function getRewardRate(uint256 amount) public view returns(uint256) {
